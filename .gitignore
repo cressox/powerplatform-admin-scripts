@@ -1,0 +1,15 @@
+# Generated backup artifacts
+backups/
+
+# Logs and temporary files
+*.log
+*.tmp
+
+# PowerShell artifacts
+*.psd1.bak
+*.psm1.bak
+
+# Editor/system
+.vscode/
+.DS_Store
+Thumbs.db
