@@ -6,6 +6,8 @@ Thank you for contributing to this repository.
 
 This repository focuses on practical PowerShell scripts for Power Platform and Power BI administration, backup, and ALM support.
 
+Current GUI scope in `powerplatform-full-backup-gui.ps1` is Apps + Solutions.
+
 ## Contribution Guidelines
 
 - Keep scripts production-focused and parameter-driven.
@@ -13,6 +15,7 @@ This repository focuses on practical PowerShell scripts for Power Platform and P
 - Add clear console output (`[INFO]`, `[WARN]`) for traceability.
 - Always write a run log where practical.
 - Keep naming and folder structure consistent with existing scripts.
+- Prefer reusable non-interactive scripts for scheduled automation (see `backup-dev-prod-personalprod.ps1`).
 
 ## Pull Request Checklist
 

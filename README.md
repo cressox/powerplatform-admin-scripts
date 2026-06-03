@@ -13,7 +13,10 @@ Praktische, produktionsnahe PowerShell-Skripte fuer Power Platform und Power BI 
 | Skript | Zweck | Technologie | Output |
 |---|---|---|---|
 | `backup-all-canvas-apps.ps1` | Export aller Canvas Apps einer Environment | `pac` CLI | `.msapp`, optional Source-Extract, CSV-Log |
+| `backup-dev-prod-personalprod.ps1` | One-Click-Export fuer die drei Ziel-Umgebungen `dev`, `prod` und `personalprod` (Apps + Solutions) | `pac` CLI | Strukturierter Laufordner je Zielumgebung, CSV-Log |
 | `powerapps-interactive-menu.ps1` | Interaktive Menuefuehrung fuer sichtbare Environments, App-Liste, Details und selektiven Export | `pac` CLI | Selektiver Export als `.msapp` und optional Source-Extract, CSV-Log |
+| `powerplatform-full-backup-gui.ps1` | GUI-Programm fuer lokalen Voll-Export: mehrere Environments auswaehlen, Zielordner waehlen und dann alle Canvas Apps + alle Solutions exportieren | PowerShell Windows Forms + `pac` CLI | Strukturierte Vollbackups pro Environment mit CSV-Log |
+| `export-powerapps-solutions.ps1` | Gezielter Export von Loesungen aus einer Environment (inkl. enthaltener Komponenten wie Canvas Apps, Flows, Tabellen, etc.) | `pac` CLI | Solution ZIP(s) managed/unmanaged, CSV-Log |
 | `backup-all-powerautomate-flows.ps1` | Export aller Power Automate Flows einer Environment | PowerApps Admin PowerShell | JSON je Flow, CSV-Log |
 | `backup-all-powerbi-dashboards.ps1` | Export von Power BI Dashboard-Metadaten aus Workspaces in der Cloud | MicrosoftPowerBIMgmt + REST | JSON je Dashboard (inkl. Tiles), CSV-Log |
 
@@ -49,6 +52,32 @@ Install-Module MicrosoftPowerBIMgmt -Scope CurrentUser
 .\backup-all-canvas-apps.ps1 -EnvironmentId "<ENV-ID>" -RunAuthCreate
 ```
 
+### One-Click Export fuer dev, prod und personalprod
+
+Dieses Skript exportiert automatisch Apps und Solutions fuer:
+
+- `dev`: `bfe8bb76-9c0c-e4d8-b2da-0dedc51fdd50`
+- `prod`: `a7ab9d07-3149-e35b-8c2d-a6701ac40342`
+- `personalprod`: automatisch aus `pac env list` erkannt (oder per Parameter gesetzt)
+
+Standardaufruf:
+
+```powershell
+.\backup-dev-prod-personalprod.ps1
+```
+
+Optional ohne Source-Extract:
+
+```powershell
+.\backup-dev-prod-personalprod.ps1 -SkipSourceExtract
+```
+
+Optional mit expliziter PersonalProd-ID:
+
+```powershell
+.\backup-dev-prod-personalprod.ps1 -PersonalProdEnvironmentId "<ENV-ID>"
+```
+
 ### Interaktive PowerApps-Menuefuehrung
 
 ```powershell
@@ -82,10 +111,60 @@ Menueoptionen im Skript:
 - `8` Export als `.msapp` plus Source-Extract
 - `9` Menue beenden
 
+### Lokales GUI Vollbackup (mehrere Environments per Klick)
+
+Dieses Programm ist fuer den manuellen Start am eigenen PC gedacht.
+
+Features:
+
+- Sichtbare Environments laden und per Checkbox auswaehlen
+- Zielordner per Dialog waehlen
+- Zwei Bereiche: `Solutions` und `Apps`
+- Inhalte pro Bereich fetchen und im GUI anzeigen
+- Live-Filter pro Tab (Suche nach Name/Environment)
+- Exportmodus `komplett` (alles Gefetchte) oder `individuell` (nur angehaktes)
+- Live-Log im GUI sowie CSV-Log je Lauf
+
+Wichtige Login-Buttons im GUI:
+
+- `pac auth create` fuer Environment-/App-/Solution-Operationen
+
+Start:
+
+```powershell
+.\powerplatform-full-backup-gui.ps1
+```
+
 ### Power Automate Flows exportieren
 
 ```powershell
 .\backup-all-powerautomate-flows.ps1 -EnvironmentId "<ENV-ID>" -RunLogin
+```
+
+### Loesungen gezielt exportieren (wichtig fuer App-Komponenten ausserhalb "Meine Apps")
+
+Beispiel fuer eine konkrete Loesung:
+
+```powershell
+.\export-powerapps-solutions.ps1 -EnvironmentId "<ENV-ID>" -SolutionNames "OnOffboardingApp"
+```
+
+Managed und Unmanaged in einem Lauf:
+
+```powershell
+.\export-powerapps-solutions.ps1 -EnvironmentId "<ENV-ID>" -SolutionNames "OnOffboardingApp" -Managed -Unmanaged
+```
+
+Interaktive Auswahl aus den Loesungen der Environment:
+
+```powershell
+.\export-powerapps-solutions.ps1 -EnvironmentId "<ENV-ID>"
+```
+
+Nur Loesungen anzeigen (kein Export):
+
+```powershell
+.\export-powerapps-solutions.ps1 -EnvironmentId "<ENV-ID>" -ListOnly
 ```
 
 ### Power BI Dashboards exportieren (Interactive Login)
@@ -122,6 +201,14 @@ Standard-Ausgabeverzeichnis ist `backups`.
 - Flows: `flow-backup-YYYYMMDD-HHMMSS`
 	- `json/`
 	- `backup-log.csv`
+- Solutions: `solution-export-YYYYMMDD-HHMMSS`
+	- `zip/`
+	- `export-log.csv`
+- One-Click dev/prod/personalprod: `monthly-dev-prod-personalprod-YYYYMMDD-HHMMSS`
+	- `dev/apps`, `dev/solutions`
+	- `prod/apps`, `prod/solutions`
+	- `personalprod/apps`, `personalprod/solutions`
+	- `export-log.csv`
 - Power BI Dashboards: `powerbi-dashboard-backup-YYYYMMDD-HHMMSS`
 	- `json/`
 	- `backup-log.csv`
@@ -138,3 +225,7 @@ Standard-Ausgabeverzeichnis ist `backups`.
 - Optionale Archivierung (ZIP) pro Lauf
 - Optionales Upload-Target (z. B. Azure Storage)
 - Optionales Delta-Export-Verhalten
+
+## Detaillierte Setup-Anleitung
+
+Fuer den lokalen GUI-Ansatz ist keine Azure-Runbook-Einrichtung notwendig.

@@ -7,6 +7,8 @@ The main goal is to make recurring operational tasks reliable, repeatable, and e
 ## Current focus
 - Automated backup and export of Canvas Apps
 - Interactive Power Apps environment and app discovery with guided export
+- GUI-based full export across selected environments (Apps + Solutions)
+- One-click bulk export for fixed target environments (dev/prod/personalprod)
 - Backup and export of Power Automate Flows
 - Cloud export of Power BI dashboard metadata
 - Practical ALM support scripts for daily admin workflows
@@ -18,6 +20,8 @@ This repository provides reusable PowerShell scripts to standardize these tasks 
 ## Example use cases
 - Backup all Canvas Apps from a specific environment
 - Browse environments visible to the current user and selectively export apps
+- Select multiple environments in a GUI and export all discovered apps and solutions
+- Run a single script to export apps and solutions from `dev`, `prod`, and `personalprod`
 - Store both msapp files and source-extracted app structure
 - Export all Power Automate flows from an environment as JSON definitions
 - Export Power BI dashboards (and tiles) from cloud workspaces
