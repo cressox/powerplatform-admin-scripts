@@ -61,17 +61,19 @@ function Get-UniquePath {
     param(
         [Parameter(Mandatory = $true)][string]$Directory,
         [Parameter(Mandatory = $true)][string]$BaseName,
-        [Parameter(Mandatory = $true)][string]$Extension
+        [string]$Extension = ""
     )
 
-    $candidate = Join-Path -Path $Directory -ChildPath ("{0}{1}" -f $BaseName, $Extension)
+    $candidateName = if ([string]::IsNullOrWhiteSpace($Extension)) { $BaseName } else { "{0}{1}" -f $BaseName, $Extension }
+    $candidate = Join-Path -Path $Directory -ChildPath $candidateName
     if (-not (Test-Path $candidate)) {
         return $candidate
     }
 
     $index = 2
     while ($true) {
-        $candidate = Join-Path -Path $Directory -ChildPath ("{0}-{1}{2}" -f $BaseName, $index, $Extension)
+        $candidateName = if ([string]::IsNullOrWhiteSpace($Extension)) { "{0}-{1}" -f $BaseName, $index } else { "{0}-{1}{2}" -f $BaseName, $index, $Extension }
+        $candidate = Join-Path -Path $Directory -ChildPath $candidateName
         if (-not (Test-Path $candidate)) {
             return $candidate
         }
@@ -177,7 +179,10 @@ function Get-SolutionCanvasAppDefinitions {
 
         $canvasAppsDir = Join-Path -Path $tempRoot -ChildPath "CanvasApps"
         if (-not (Test-Path $canvasAppsDir)) {
-            return @()
+            return [pscustomobject]@{
+                ExtractRoot = $tempRoot
+                Apps        = @()
+            }
         }
 
         $definitions = New-Object System.Collections.Generic.List[object]
@@ -205,18 +210,20 @@ function Get-SolutionCanvasAppDefinitions {
             if ([string]::IsNullOrWhiteSpace($appId)) { continue }
 
             $definitions.Add([pscustomobject]@{
+                    SolutionExtractRoot = $tempRoot
                     Prefix    = $prefix
                     AppId     = $appId
                     MsappPath = $msappPath
                 })
         }
 
-        return $definitions.ToArray()
-    }
-    finally {
-        if (Test-Path $tempRoot) {
-            Remove-Item -Path $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        return [pscustomobject]@{
+            ExtractRoot = $tempRoot
+            Apps        = $definitions.ToArray()
         }
+    }
+    catch {
+        throw
     }
 }
 
@@ -243,15 +250,19 @@ function Export-ContainedCanvasApps {
         New-Item -ItemType Directory -Path $srcDir -Force | Out-Null
     }
 
-    $canvasApps = @()
+    $canvasAppData = $null
     try {
-        $canvasApps = @(Get-SolutionCanvasAppDefinitions -ZipPath $ZipPath)
+        $canvasAppData = Get-SolutionCanvasAppDefinitions -ZipPath $ZipPath
+        $canvasApps = @($canvasAppData.Apps)
     }
     catch {
         Write-WarnMsg "[$($EnvironmentName)] Canvas-App-Analyse aus Solution fehlgeschlagen: $SolutionName ($VariantLabel)"
         return
     }
 
+    $solutionExtractRoot = $canvasAppData.ExtractRoot
+
+    try {
     if ($canvasApps.Count -eq 0) {
         Write-Info "[$($EnvironmentName)] Keine Canvas Apps in der Loesung '$SolutionName' ($VariantLabel) gefunden."
         return
@@ -268,21 +279,14 @@ function Export-ContainedCanvasApps {
         $errorMessage = ""
 
         try {
-            Invoke-Pac -Arguments @(
-                "canvas", "download",
-                "--environment", $EnvironmentId,
-                "--name", $canvasApp.AppId,
-                "--file-name", $msappPath,
-                "--overwrite"
-            ) | Out-Null
+            Copy-Item -Path $canvasApp.MsappPath -Destination $msappPath -Force
 
             if (-not $SkipSourceExtract) {
+                New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
                 Invoke-Pac -Arguments @(
-                    "canvas", "download",
-                    "--environment", $EnvironmentId,
-                    "--name", $canvasApp.AppId,
-                    "--extract-to-directory", $extractDir,
-                    "--overwrite"
+                    "canvas", "unpack",
+                    "--msapp", $msappPath,
+                    "--sources", $extractDir
                 ) | Out-Null
             }
         }
@@ -304,6 +308,11 @@ function Export-ContainedCanvasApps {
                 Error         = $errorMessage
             })
     }
+    }
+    finally {
+        if (-not [string]::IsNullOrWhiteSpace($solutionExtractRoot) -and (Test-Path $solutionExtractRoot)) {
+            Remove-Item -Path $solutionExtractRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
 }
 
 function Resolve-PersonalProdEnvironmentId {
@@ -458,26 +467,35 @@ foreach ($target in $targets) {
                     "--overwrite"
                 ) | Out-Null
 
-                Export-ContainedCanvasApps -EnvironmentId $envId -EnvironmentName $alias -SolutionName $solutionName -VariantLabel $variant.Label -ZipPath $zipPath -SolutionRoot $solutionsRoot -SkipSourceExtract:$SkipSourceExtract -Results $results
+                $results.Add([pscustomobject]@{
+                        Timestamp     = (Get-Date).ToString("s")
+                        Environment   = $alias
+                        EnvironmentId = $envId
+                        AssetType     = "Solutions"
+                        Name          = $solutionName
+                        Variant       = $variant.Label
+                        Path          = $zipPath
+                        Status        = "Success"
+                        Error         = ""
+                    })
+
+                try {
+                    Export-ContainedCanvasApps -EnvironmentId $envId -EnvironmentName $alias -SolutionName $solutionName -VariantLabel $variant.Label -ZipPath $zipPath -SolutionRoot $solutionsRoot -SkipSourceExtract:$SkipSourceExtract -Results $results
+                }
+                catch {
+                    Write-WarnMsg "[$alias][Solutions] Canvas-App-Nachziehung nicht abgeschlossen: $solutionName ($($variant.Label))"
+                }
             }
             catch {
                 $status = "Failed"
                 $errorMessage = $_.Exception.Message
                 Write-WarnMsg "[$alias][Solutions] Export fehlgeschlagen: $solutionName ($($variant.Label))"
             }
-
-            $results.Add([pscustomobject]@{
-                    Timestamp     = (Get-Date).ToString("s")
-                    Environment   = $alias
-                    EnvironmentId = $envId
-                    AssetType     = "Solutions"
-                    Name          = $solutionName
-                    Variant       = $variant.Label
-                    Path          = $zipPath
-                    Status        = $status
-                    Error         = $errorMessage
-                })
         }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($solutionExtractRoot) -and (Test-Path $solutionExtractRoot)) {
+        Remove-Item -Path $solutionExtractRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
