@@ -83,6 +83,193 @@ function Get-SafeFileName {
     return $safe
 }
 
+function Get-UniquePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Directory,
+        [Parameter(Mandatory = $true)][string]$BaseName,
+        [Parameter(Mandatory = $true)][string]$Extension
+    )
+
+    $candidate = Join-Path -Path $Directory -ChildPath ("{0}{1}" -f $BaseName, $Extension)
+    if (-not (Test-Path $candidate)) {
+        return $candidate
+    }
+
+    $index = 2
+    while ($true) {
+        $candidate = Join-Path -Path $Directory -ChildPath ("{0}-{1}{2}" -f $BaseName, $index, $Extension)
+        if (-not (Test-Path $candidate)) {
+            return $candidate
+        }
+
+        $index++
+    }
+}
+
+function Get-SolutionCanvasAppDefinitions {
+    param([Parameter(Mandatory = $true)][string]$ZipPath)
+
+    $tempRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath ("pp-solution-unpack-{0}" -f ([guid]::NewGuid().ToString("N")))
+    New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+
+    try {
+        Expand-Archive -Path $ZipPath -DestinationPath $tempRoot -Force
+
+        $canvasAppsDir = Join-Path -Path $tempRoot -ChildPath "CanvasApps"
+        if (-not (Test-Path $canvasAppsDir)) {
+            return @()
+        }
+
+        $definitions = New-Object System.Collections.Generic.List[object]
+        $identityFiles = @(Get-ChildItem -Path $canvasAppsDir -Filter "*_identity.json" -File -ErrorAction SilentlyContinue)
+
+        foreach ($identityFile in $identityFiles) {
+            $prefix = $identityFile.BaseName -replace '_AdditionalUris\d+_identity$',''
+            if ([string]::IsNullOrWhiteSpace($prefix)) { continue }
+
+            $msappPath = Join-Path -Path $canvasAppsDir -ChildPath ("{0}_DocumentUri.msapp" -f $prefix)
+            if (-not (Test-Path $msappPath)) { continue }
+
+            $appId = ""
+            try {
+                $identity = Get-Content -Path $identityFile.FullName -Raw | ConvertFrom-Json
+                if ($null -ne $identity.PSObject.Properties["App"]) {
+                    $appId = [string]$identity.App
+                }
+            }
+            catch {
+                Write-WarnMsg "Konnte Identity-Datei nicht lesen: $($identityFile.FullName)"
+                continue
+            }
+
+            if ([string]::IsNullOrWhiteSpace($appId)) { continue }
+
+            $definitions.Add([pscustomobject]@{
+                    Prefix       = $prefix
+                    AppId        = $appId
+                    IdentityPath = $identityFile.FullName
+                    MsappPath    = $msappPath
+                })
+        }
+
+        return $definitions.ToArray()
+    }
+    finally {
+        if (Test-Path $tempRoot) {
+            Remove-Item -Path $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Export-ContainedCanvasApps {
+    param(
+        [Parameter(Mandatory = $true)][string]$EnvironmentId,
+        [Parameter(Mandatory = $true)][string]$SolutionName,
+        [Parameter(Mandatory = $true)][string]$VariantLabel,
+        [Parameter(Mandatory = $true)][string]$ZipPath,
+        [Parameter(Mandatory = $true)][string]$RunRoot,
+        [switch]$SkipSourceExtract,
+        [Parameter(Mandatory = $true)]$ExportedCanvasAppIds,
+        [Parameter(Mandatory = $true)]$Results
+    )
+
+    $safeSolutionName = Get-SafeFileName -Name $SolutionName
+    $appsRoot = Join-Path -Path $RunRoot -ChildPath "apps"
+    $solutionAppsRoot = Join-Path -Path $appsRoot -ChildPath $safeSolutionName
+    $msappDir = Join-Path -Path $solutionAppsRoot -ChildPath "msapp"
+    $srcDir = Join-Path -Path $solutionAppsRoot -ChildPath "src"
+
+    New-Item -ItemType Directory -Path $msappDir -Force | Out-Null
+    if (-not $SkipSourceExtract) {
+        New-Item -ItemType Directory -Path $srcDir -Force | Out-Null
+    }
+
+    $canvasApps = @()
+    try {
+        $canvasApps = @(Get-SolutionCanvasAppDefinitions -ZipPath $ZipPath)
+    }
+    catch {
+        $Results.Add([pscustomobject]@{
+                Timestamp     = (Get-Date).ToString("s")
+                EnvironmentId = $EnvironmentId
+                SolutionName  = $SolutionName
+                Variant       = $VariantLabel
+                AssetType     = "CanvasApp"
+                ItemName      = ""
+                ItemId        = ""
+                Path          = ""
+                SourcePath    = ""
+                ZipPath       = $ZipPath
+                Status        = "Failed"
+                Error         = $_.Exception.Message
+            })
+        Write-WarnMsg "Canvas-App-Analyse aus Solution fehlgeschlagen fuer '$SolutionName' ($VariantLabel)"
+        return
+    }
+
+    if ($canvasApps.Count -eq 0) {
+        Write-Info "Keine Canvas Apps in der Loesung '$SolutionName' ($VariantLabel) gefunden."
+        return
+    }
+
+    Write-Info "Exportiere $($canvasApps.Count) Canvas App(s) aus '$SolutionName' ($VariantLabel)"
+
+    foreach ($canvasApp in $canvasApps) {
+        if ($ExportedCanvasAppIds.Contains($canvasApp.AppId)) {
+            continue
+        }
+
+        $ExportedCanvasAppIds.Add($canvasApp.AppId) | Out-Null
+
+        $safeAppName = Get-SafeFileName -Name $canvasApp.Prefix
+        $msappPath = Get-UniquePath -Directory $msappDir -BaseName $safeAppName -Extension ".msapp"
+        $extractDir = Get-UniquePath -Directory $srcDir -BaseName $safeAppName -Extension ""
+
+        $status = "Success"
+        $errorMessage = ""
+
+        try {
+            Invoke-Pac -Arguments @(
+                "canvas", "download",
+                "--environment", $EnvironmentId,
+                "--name", $canvasApp.AppId,
+                "--file-name", $msappPath,
+                "--overwrite"
+            ) | Out-Null
+
+            if (-not $SkipSourceExtract) {
+                Invoke-Pac -Arguments @(
+                    "canvas", "download",
+                    "--environment", $EnvironmentId,
+                    "--name", $canvasApp.AppId,
+                    "--extract-to-directory", $extractDir,
+                    "--overwrite"
+                ) | Out-Null
+            }
+        }
+        catch {
+            $status = "Failed"
+            $errorMessage = $_.Exception.Message
+            Write-WarnMsg "Canvas App Export fehlgeschlagen fuer '$($canvasApp.Prefix)'"
+        }
+
+        $Results.Add([pscustomobject]@{
+                Timestamp     = (Get-Date).ToString("s")
+                EnvironmentId = $EnvironmentId
+                SolutionName  = $SolutionName
+                Variant       = $VariantLabel
+                AssetType     = "CanvasApp"
+                ItemName      = $canvasApp.Prefix
+                ItemId        = $canvasApp.AppId
+                Path          = $msappPath
+                SourcePath    = if ($SkipSourceExtract) { "" } else { $extractDir }
+                ZipPath       = $ZipPath
+                Status        = $status
+                Error         = $errorMessage
+            })
+    }
+}
+
 function Get-SolutionUniqueNames {
     param([AllowNull()][string[]]$Lines = @())
 
@@ -218,11 +405,14 @@ if ($solutionsToExport.Count -eq 0) {
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $runRoot = Join-Path -Path $OutputRoot -ChildPath "solution-export-$timestamp"
 $zipDir = Join-Path -Path $runRoot -ChildPath "zip"
+$appsDir = Join-Path -Path $runRoot -ChildPath "apps"
 $logPath = Join-Path -Path $runRoot -ChildPath "export-log.csv"
 
 New-Item -ItemType Directory -Path $zipDir -Force | Out-Null
+New-Item -ItemType Directory -Path $appsDir -Force | Out-Null
 
 $results = New-Object System.Collections.Generic.List[object]
+$exportedCanvasAppIds = New-Object 'System.Collections.Generic.HashSet[string]'
 
 foreach ($solutionName in $solutionsToExport) {
     $safeName = Get-SafeFileName -Name $solutionName
@@ -259,6 +449,8 @@ foreach ($solutionName in $solutionsToExport) {
 
         try {
             Invoke-Pac -Arguments $pacArgs | Out-Null
+
+            Export-ContainedCanvasApps -EnvironmentId $EnvironmentId -SolutionName $solutionName -VariantLabel $variant.Label -ZipPath $zipPath -RunRoot $runRoot -SkipSourceExtract:$SkipSourceExtract -ExportedCanvasAppIds $exportedCanvasAppIds -Results $results
         }
         catch {
             $status = "Failed"
@@ -271,6 +463,11 @@ foreach ($solutionName in $solutionsToExport) {
                 EnvironmentId  = $EnvironmentId
                 SolutionName   = $solutionName
                 Variant        = $variant.Label
+                AssetType      = "SolutionZip"
+                ItemName       = $solutionName
+                ItemId         = ""
+                Path           = $zipPath
+                SourcePath     = ""
                 ZipPath        = $zipPath
                 Status         = $status
                 Error          = $errorMessage
