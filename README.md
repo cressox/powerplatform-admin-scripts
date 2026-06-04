@@ -13,9 +13,9 @@ Praktische, produktionsnahe PowerShell-Skripte fuer Power Platform und Power BI 
 | Skript | Zweck | Technologie | Output |
 |---|---|---|---|
 | `backup-all-canvas-apps.ps1` | Export aller Canvas Apps einer Environment | `pac` CLI | `.msapp`, optional Source-Extract, CSV-Log |
-| `backup-dev-prod-personalprod.ps1` | One-Click-Export fuer die drei Ziel-Umgebungen `dev`, `prod` und `personalprod` (Apps + Solutions) | `pac` CLI | Strukturierter Laufordner je Zielumgebung, CSV-Log |
+| `backup-dev-prod-personalprod.ps1` | One-Click-Export fuer die drei Ziel-Umgebungen `dev`, `prod` und `personalprod` (Apps + Solutions inkl. separater Canvas-App-Exports aus Solutions) | `pac` CLI | Strukturierter Laufordner je Zielumgebung, CSV-Log |
 | `powerapps-interactive-menu.ps1` | Interaktive Menuefuehrung fuer sichtbare Environments, App-Liste, Details und selektiven Export | `pac` CLI | Selektiver Export als `.msapp` und optional Source-Extract, CSV-Log |
-| `powerplatform-full-backup-gui.ps1` | GUI-Programm fuer lokalen Voll-Export: mehrere Environments auswaehlen, Zielordner waehlen und dann alle Canvas Apps + alle Solutions exportieren | PowerShell Windows Forms + `pac` CLI | Strukturierte Vollbackups pro Environment mit CSV-Log |
+| `powerplatform-full-backup-gui.ps1` | GUI-Programm fuer lokalen Voll-Export: mehrere Environments auswaehlen, Zielordner waehlen und dann alle Canvas Apps + alle Solutions exportieren; Solution-Exporte sichern enthaltene Canvas Apps separat | PowerShell Windows Forms + `pac` CLI | Strukturierte Vollbackups pro Environment mit CSV-Log |
 | `export-powerapps-solutions.ps1` | Gezielter Export von Loesungen aus einer Environment (inkl. enthaltener Komponenten wie Canvas Apps, Flows, Tabellen, etc.) | `pac` CLI | Solution ZIP(s) managed/unmanaged plus separate Canvas-App-Exports, CSV-Log |
 | `backup-all-powerautomate-flows.ps1` | Export aller Power Automate Flows einer Environment | PowerApps Admin PowerShell | JSON je Flow, CSV-Log |
 | `backup-all-powerbi-dashboards.ps1` | Export von Power BI Dashboard-Metadaten aus Workspaces in der Cloud | MicrosoftPowerBIMgmt + REST | JSON je Dashboard (inkl. Tiles), CSV-Log |
@@ -206,10 +206,12 @@ Standard-Ausgabeverzeichnis ist `backups`.
 	- `apps/<solution>/msapp/`
 	- `apps/<solution>/src/`
 	- `export-log.csv`
+
 - One-Click dev/prod/personalprod: `monthly-dev-prod-personalprod-YYYYMMDD-HHMMSS`
 	- `dev/apps`, `dev/solutions`
 	- `prod/apps`, `prod/solutions`
 	- `personalprod/apps`, `personalprod/solutions`
+	- Solution-Canvas-Apps liegen jeweils unter `apps/<solution>-<variant>/msapp/` und `apps/<solution>-<variant>/src/`
 	- `export-log.csv`
 - Power BI Dashboards: `powerbi-dashboard-backup-YYYYMMDD-HHMMSS`
 	- `json/`

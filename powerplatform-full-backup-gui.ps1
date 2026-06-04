@@ -206,6 +206,146 @@ function Get-SolutionItems {
     return $items.ToArray()
 }
 
+function Get-SolutionCanvasAppDefinitions {
+    param([Parameter(Mandatory = $true)][string]$ZipPath)
+
+    $tempRoot = Join-Path -Path ([IO.Path]::GetTempPath()) -ChildPath ("pp-solution-unpack-{0}" -f ([guid]::NewGuid().ToString("N")))
+    New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+
+    try {
+        Expand-Archive -Path $ZipPath -DestinationPath $tempRoot -Force
+
+        $canvasAppsDir = Join-Path -Path $tempRoot -ChildPath "CanvasApps"
+        if (-not (Test-Path $canvasAppsDir)) {
+            return @()
+        }
+
+        $definitions = New-Object System.Collections.Generic.List[object]
+        $identityFiles = @(Get-ChildItem -Path $canvasAppsDir -Filter "*_identity.json" -File -ErrorAction SilentlyContinue)
+
+        foreach ($identityFile in $identityFiles) {
+            $prefix = $identityFile.BaseName -replace '_AdditionalUris\d+_identity$',''
+            if ([string]::IsNullOrWhiteSpace($prefix)) { continue }
+
+            $msappPath = Join-Path -Path $canvasAppsDir -ChildPath ("{0}_DocumentUri.msapp" -f $prefix)
+            if (-not (Test-Path $msappPath)) { continue }
+
+            $appId = ""
+            try {
+                $identity = Get-Content -Path $identityFile.FullName -Raw | ConvertFrom-Json
+                if ($null -ne $identity.PSObject.Properties["App"]) {
+                    $appId = [string]$identity.App
+                }
+            }
+            catch {
+                continue
+            }
+
+            if ([string]::IsNullOrWhiteSpace($appId)) { continue }
+
+            $definitions.Add([pscustomobject]@{
+                    Prefix    = $prefix
+                    AppId     = $appId
+                    MsappPath = $msappPath
+                })
+        }
+
+        return $definitions.ToArray()
+    }
+    finally {
+        if (Test-Path $tempRoot) {
+            Remove-Item -Path $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Export-ContainedCanvasApps {
+    param(
+        [Parameter(Mandatory = $true)][string]$EnvironmentId,
+        [Parameter(Mandatory = $true)][string]$EnvironmentName,
+        [Parameter(Mandatory = $true)][string]$SolutionName,
+        [Parameter(Mandatory = $true)][string]$VariantLabel,
+        [Parameter(Mandatory = $true)][string]$ZipPath,
+        [Parameter(Mandatory = $true)][string]$RunRoot,
+        [Parameter(Mandatory = $true)][bool]$IncludeCanvasSource,
+        [Parameter(Mandatory = $true)][System.Windows.Forms.TextBox]$LogBox,
+        [Parameter(Mandatory = $true)]$Results
+    )
+
+    $envSafe = Get-SafeFileName -Name $EnvironmentName
+    $safeSolution = Get-SafeFileName -Name $SolutionName
+    $safeVariant = Get-SafeFileName -Name $VariantLabel
+    $solutionAppsRoot = Join-Path -Path $RunRoot -ChildPath ("{0}/apps/{1}-{2}" -f $envSafe, $safeSolution, $safeVariant)
+    $msappDir = Join-Path -Path $solutionAppsRoot -ChildPath "msapp"
+    $srcDir = Join-Path -Path $solutionAppsRoot -ChildPath "src"
+
+    New-Item -ItemType Directory -Path $msappDir -Force | Out-Null
+    if ($IncludeCanvasSource) {
+        New-Item -ItemType Directory -Path $srcDir -Force | Out-Null
+    }
+
+    $canvasApps = @()
+    try {
+        $canvasApps = @(Get-SolutionCanvasAppDefinitions -ZipPath $ZipPath)
+    }
+    catch {
+        Write-LogLine -LogBox $LogBox -Message ("WARN [Solutions] Canvas-App-Analyse fehlgeschlagen: {0} / {1} ({2})" -f $EnvironmentName, $SolutionName, $VariantLabel)
+        return
+    }
+
+    if ($canvasApps.Count -eq 0) {
+        Write-LogLine -LogBox $LogBox -Message ("[Solutions] Keine Canvas Apps in der Loesung gefunden: {0} / {1} ({2})" -f $EnvironmentName, $SolutionName, $VariantLabel)
+        return
+    }
+
+    Write-LogLine -LogBox $LogBox -Message ("[Solutions] Exportiere {0} Canvas App(s) aus {1} / {2} ({3})" -f $canvasApps.Count, $EnvironmentName, $SolutionName, $VariantLabel)
+
+    foreach ($canvasApp in $canvasApps) {
+        $safeAppName = Get-SafeFileName -Name $canvasApp.Prefix
+        $msappPath = Get-UniquePath -Directory $msappDir -BaseName $safeAppName -Extension ".msapp"
+        $extractDir = Get-UniquePath -Directory $srcDir -BaseName $safeAppName -Extension ""
+
+        $status = "Success"
+        $errorMessage = ""
+
+        try {
+            Invoke-Pac -Arguments @(
+                "canvas", "download",
+                "--environment", $EnvironmentId,
+                "--name", $canvasApp.AppId,
+                "--file-name", $msappPath,
+                "--overwrite"
+            ) | Out-Null
+
+            if ($IncludeCanvasSource) {
+                Invoke-Pac -Arguments @(
+                    "canvas", "download",
+                    "--environment", $EnvironmentId,
+                    "--name", $canvasApp.AppId,
+                    "--extract-to-directory", $extractDir,
+                    "--overwrite"
+                ) | Out-Null
+            }
+        }
+        catch {
+            $status = "Failed"
+            $errorMessage = $_.Exception.Message
+            Write-LogLine -LogBox $LogBox -Message ("WARN [Solutions] Canvas App Export fehlgeschlagen: {0} / {1} / {2}" -f $EnvironmentName, $SolutionName, $canvasApp.Prefix)
+        }
+
+        $Results.Add([pscustomobject]@{
+                Timestamp = (Get-Date).ToString("s")
+                Type      = "SolutionApps"
+                Scope     = $EnvironmentName
+                Name      = $canvasApp.Prefix
+                Variant   = "{0}/{1}" -f $SolutionName, $VariantLabel
+                Path      = $msappPath
+                Status    = $status
+                Error     = $errorMessage
+            })
+    }
+}
+
 function Add-DedupedItems {
     param(
         [Parameter(Mandatory = $true)]$Target,
@@ -525,6 +665,8 @@ function Export-Items {
                             "--overwrite"
                         ) | Out-Null
                         $savedPath = $zipPath
+
+                        Export-ContainedCanvasApps -EnvironmentId $item.EnvironmentId -EnvironmentName $item.EnvironmentName -SolutionName $item.Name -VariantLabel $variant.Label -ZipPath $zipPath -RunRoot $RunRoot -IncludeCanvasSource $IncludeCanvasSource -LogBox $LogBox -Results $results
 
                         $results.Add([pscustomobject]@{
                                 Timestamp = (Get-Date).ToString("s")
